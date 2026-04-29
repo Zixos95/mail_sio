@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-IFS=$'\n\t'
+IFS=$' \t\n'
 
 SCRIPT_NAME="$(basename "$0")"
 
@@ -50,15 +50,11 @@ prompt_if_interactive() {
   local varname="$1"
   local question="$2"
   local default_value="${3:-}"
-  local current="${!varname:-}"
 
   if [[ "$(is_tty && echo 1 || echo 0)" == "0" ]]; then
     return 0
   fi
   if [[ "$INTERACTIVE" != "1" ]]; then
-    return 0
-  fi
-  if [[ -n "$current" && "$current" != "$default_value" ]]; then
     return 0
   fi
 
@@ -79,15 +75,11 @@ prompt_bool_if_interactive() {
   local varname="$1"
   local question="$2"
   local default_value="${3:-0}"
-  local current="${!varname:-}"
 
   if [[ "$(is_tty && echo 1 || echo 0)" == "0" ]]; then
     return 0
   fi
   if [[ "$INTERACTIVE" != "1" ]]; then
-    return 0
-  fi
-  if [[ -n "$current" && "$current" != "$default_value" ]]; then
     return 0
   fi
 
@@ -113,6 +105,13 @@ interactive_setup() {
   prompt_if_interactive MYNETWORKS "Plages mynetworks SMTP (liste séparée par virgule)" "${MYNETWORKS}"
   prompt_if_interactive RUN_FIREWALL "Activer firewall ufw (0=non, 1=oui)" "${RUN_FIREWALL}"
   prompt_bool_if_interactive SSL_ENABLED "Activer TLS/SSL (labo, auto-signé)" "${SSL_ENABLED}"
+
+  prompt_if_interactive REMOTE_TEST_EMAIL "Email distant de test (vide = ignorer)" "${REMOTE_TEST_EMAIL}"
+  prompt_if_interactive REMOTE_TEST_SENDER "Expéditeur distant (vide = auto)" "${REMOTE_TEST_SENDER}"
+  prompt_if_interactive REMOTE_TEST_SMTP_HOST "Serveur SMTP distant (vide = envoyer via serveur local)" "${REMOTE_TEST_SMTP_HOST}"
+  prompt_if_interactive REMOTE_TEST_SMTP_PORT "Port SMTP distant" "${REMOTE_TEST_SMTP_PORT}"
+
+  prompt_if_interactive WORKDIR "Dossier de travail/logs" "${WORKDIR}"
 }
 
 CERT_DIR="${CERT_DIR:-/etc/ssl/mail-isole}"
@@ -191,10 +190,19 @@ create_local_users() {
 
     echo "${u}:${DEFAULT_USER_PASSWORD}" | chpasswd
 
-    install -d -m 0750 -o "$u" -g "$u" "/home/${u}/Maildir"
-    install -d -m 0700 -o "$u" -g "$u" "/home/${u}/Maildir/cur"
-    install -d -m 0700 -o "$u" -g "$u" "/home/${u}/Maildir/new"
-    install -d -m 0700 -o "$u" -g "$u" "/home/${u}/Maildir/tmp"
+    local home_dir
+    home_dir="$(getent passwd "$u" | cut -d: -f6 || true)"
+    [[ -n "$home_dir" ]] || home_dir="/home/${u}"
+
+    local group_name
+    group_name="$(id -gn "$u" 2>/dev/null || echo "$u")"
+
+    mkdir -p "$home_dir"
+
+    install -d -m 0750 -o "$u" -g "$group_name" "${home_dir}/Maildir"
+    install -d -m 0700 -o "$u" -g "$group_name" "${home_dir}/Maildir/cur"
+    install -d -m 0700 -o "$u" -g "$group_name" "${home_dir}/Maildir/new"
+    install -d -m 0700 -o "$u" -g "$group_name" "${home_dir}/Maildir/tmp"
   done
 }
 
