@@ -29,14 +29,18 @@ mkdir -p "$WORKDIR"
 touch "$LOG_FILE"
 
 log() {
-  printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG_FILE"
+  printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG_FILE" >/dev/null || true
+  printf '[%s] %s\n' "$(date '+%F %T')" "$*"
 }
 
 on_err() {
-  log "ERREUR: ${SCRIPT_NAME} a echoue (ligne: ${LINENO})."
-  log "Voir le journal complet: $LOG_FILE"
+  local line="${1:-$LINENO}"
+  local cmd="${2:-$BASH_COMMAND}"
+  log "ERREUR: ${SCRIPT_NAME} a echoue (ligne: ${line})."
+  log "Commande en echec: ${cmd}"
+  log "Voir le journal complet: ${LOG_FILE:-non_defini}"
 }
-trap on_err ERR
+trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
 
 is_tty() {
   [[ -t 0 && -t 1 ]]
