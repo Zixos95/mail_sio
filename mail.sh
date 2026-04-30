@@ -47,9 +47,30 @@ echo -e "${C}[INFO]${NC} Préparation des variables..."
 read -p "ID Table (ex: 15) : " ID
 read -p "Nom de la zone (ex: erreur404) : " ZONE
 
-IP_SRV="10.10.$ID.1"
-IP_SW="10.10.$ID.254"
-GW="10.10.0.1" 
+echo -e "\n${Y}>> Choix du plan d'adressage ?${NC}"
+echo -e "   1) 10.10.x.1"
+echo -e "   2) 172.30.x.1"
+read -p "Choix [1/2] (défaut: 1) : " NET_CHOICE
+
+case "${NET_CHOICE:-1}" in
+  2)
+    NET_A=172
+    NET_B=30
+    ;;
+  1|"")
+    NET_A=10
+    NET_B=10
+    ;;
+  *)
+    echo -e "${R}[ERREUR]${NC} Choix réseau invalide: '${NET_CHOICE}' (attendu 1 ou 2)"
+    exit 1
+    ;;
+esac
+
+IP_SRV="$NET_A.$NET_B.$ID.1"
+IP_SW="$NET_A.$NET_B.$ID.254"
+GW="$NET_A.$NET_B.0.1"
+LAN_CIDR="$NET_A.$NET_B.0.0/16"
 DOMAIN="$ZONE.ac-monge.fr"
 PASS_DEFAUT="2000"
 
@@ -134,7 +155,7 @@ if ask_confirm "Installer le service Mail (Postfix/Dovecot) - SANS SSL (conforme
     
     postconf -e "myhostname = mail.$DOMAIN"
     postconf -e "mydestination = \$myhostname, $DOMAIN, localhost"
-    postconf -e "mynetworks = 127.0.0.0/8 10.10.0.0/16"
+    postconf -e "mynetworks = 127.0.0.0/8 $LAN_CIDR"
     postconf -e "home_mailbox = Maildir/"
     postconf -e "smtpd_tls_security_level = none"
     postconf -e "smtpd_use_tls = no"
@@ -266,17 +287,58 @@ print_header
 echo -e "${G}DÉPLOIEMENT RÉUSSI !${NC}"
 draw_line
 echo -e "${Y}INFOS THUNDERBIRD (PARAMÈTRES MANUELS) :${NC}"
-echo -e "   - Serveur (Entrant/Sortant) : ${W}$IP_SRV${NC}"
-echo -e "   - Protocoles : ${G}IMAP (143) / SMTP (25)${NC}"
+echo -e "   - Nom de compte (email) : ${W}<utilisateur>@$DOMAIN${NC}  (ex: ${W}direction@$DOMAIN${NC})"
+echo -e "   - Identifiant (login)   : ${W}<utilisateur>${NC}  (ex: ${W}direction${NC})"
+echo -e "   - Serveur entrant       : ${W}mail.$DOMAIN${NC}  (ou ${W}$IP_SRV${NC} si pas de DNS)"
+echo -e "   - Protocole entrant     : ${G}IMAP${NC}"
+echo -e "   - Port IMAP             : ${W}143${NC}"
+echo -e "   - Sécurité IMAP         : ${R}Aucune${NC}"
+echo -e "   - Authentification IMAP : ${W}Mot de passe normal${NC}"
+echo -e "   - Serveur sortant (SMTP): ${W}mail.$DOMAIN${NC}  (ou ${W}$IP_SRV${NC})"
+echo -e "   - Port SMTP             : ${W}25${NC}"
+echo -e "   - Sécurité SMTP         : ${R}Aucune${NC}"
+echo -e "   - Authentification SMTP : ${W}Mot de passe normal${NC}"
 if [ "$SSL_ENABLED" -eq 1 ]; then
-    echo -e "   - Sécurité principale : ${R}AUCUNE / NONE${NC} (conforme sujet)"
-    echo -e "   - SSL/TLS dispo en plus : ${G}IMAPS 993 / STARTTLS SMTP 25 (cert auto-signé)${NC}"
+    echo -e "   - Option TLS (si activée plus haut) :"
+    echo -e "       - IMAPS : ${W}993${NC} (SSL/TLS activé)"
+    echo -e "       - SMTP  : ${W}25${NC} (STARTTLS si proposé, selon réglage Thunderbird)"
 else
-    echo -e "   - Sécurité : ${R}AUCUNE / NONE${NC}"
+    echo -e "   - Sécurité : ${R}AUCUNE / NONE${NC} (conforme sujet)"
 fi
-echo -e "   - Authentification : ${W}Mot de passe normal${NC}"
 echo -e "   - Comptes : ${W}direction, rh, informatique${NC} (mdp par défaut : ${PASS_DEFAUT})"
 draw_line
 echo -e "${C}Commandes de test manuelles :${NC}"
 echo -e "   - Mails en direct : ${W}tail -f /var/log/mail.log${NC}"
 echo -e "   - Vérifier DNS : ${W}dig $DOMAIN MX${NC} (ou nslookup mail.$DOMAIN)"
+
+draw_line
+echo -e "${Y}CONFIG RÉSEAU PC DE TEST (À METTRE EN STATIQUE) :${NC}"
+echo -e "   - IP (exemple) : ${W}$NET_A.$NET_B.$ID.10${NC}"
+echo -e "   - Masque      : ${W}255.255.0.0 (/16)${NC}"
+echo -e "   - Passerelle  : ${W}$GW${NC}"
+echo -e "   - DNS         : ${W}$IP_SRV${NC}  (le serveur fait DNS + WEB + MAIL)"
+echo -e "   - Domaine     : ${W}$DOMAIN${NC}"
+
+echo -e "\n${Y}RÉSULTATS ATTENDUS (DEPUIS LE PC DE TEST) :${NC}"
+echo -e "${W}1) Vérifier que le DNS pointe sur le serveur${NC}"
+echo -e "   - Commande : ${G}nslookup mail.$DOMAIN${NC}"
+echo -e "   - Attendu  : ${W}Address: $IP_SRV${NC}"
+echo -e "   - Commande : ${G}nslookup -type=mx $DOMAIN${NC}"
+echo -e "   - Attendu  : ${W}$DOMAIN mail.$DOMAIN${NC} (ou équivalent MX -> mail.$DOMAIN)"
+
+echo -e "\n${W}2) Vérifier l'accès WEB via nom (donc via DNS)${NC}"
+echo -e "   - Commande : ${G}nslookup www.$DOMAIN${NC}"
+echo -e "   - Attendu  : ${W}Address: $IP_SRV${NC}"
+echo -e "   - Commande : ${G}curl -s http://www.$DOMAIN | head${NC}"
+echo -e "   - Attendu  : ${W}<h1>Lise Charmel - Production $ZONE</h1>${NC}"
+echo -e "   - Sinon : ouvrir ${W}http://www.$DOMAIN${NC} dans un navigateur"
+
+echo -e "\n${W}3) Vérifier la connectivité IP (si besoin)${NC}"
+echo -e "   - Commande : ${G}ping -c 2 $IP_SRV${NC}"
+echo -e "   - Attendu  : ${W}2 réponses${NC}"
+
+echo -e "\n${Y}IMPORTANT (pour le /16) :${NC}"
+echo -e "   - Avec un masque ${W}/16${NC}, ton PC (${W}$NET_A.$NET_B.$ID.x${NC}) et le serveur (${W}$IP_SRV${NC})"
+echo -e "     sont dans le même réseau ${W}$NET_A.$NET_B.0.0/16${NC} -> accès direct OK."
+echo -e "   - Si tu mets un masque ${R}/24${NC}, le PC serait dans ${W}$NET_A.$NET_B.$ID.0/24${NC} et le serveur dans ${W}$NET_A.$NET_B.$ID.0/24${NC} (ça peut marcher),"
+echo -e "     mais tout ce qui est hors ${W}$NET_A.$NET_B.$ID.*${NC} (ex: passerelle ${W}$GW${NC}) dépendra du routage."
