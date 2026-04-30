@@ -73,6 +73,7 @@ GW="$NET_A.$NET_B.0.1"
 LAN_CIDR="$NET_A.$NET_B.0.0/16"
 DOMAIN="$ZONE.ac-monge.fr"
 PASS_DEFAUT="2000"
+USERS_CREATED=""
 
 # --- 2. ACTIVATION DES LOGS (CRUCIAL POUR VM NEUVE) ---
 if ask_confirm "Installer et activer les logs (/var/log/mail.log)"; then
@@ -221,16 +222,37 @@ EOF
 fi
 
 # --- 7. UTILISATEURS & PERMISSIONS ---
-if ask_confirm "Créer les comptes (direction, informatique, rh)"; then
-    for u in direction informatique rh; do
-        id -u $u &>/dev/null || useradd -m -s /bin/bash $u
+if ask_confirm "Créer des comptes utilisateurs (plusieurs possibles)"; then
+    echo -e "${Y}>> Saisis les noms d'utilisateurs à créer (séparés par espaces ou virgules).${NC}"
+    read -p "Utilisateurs (ex: direction,rh,informatique) : " USERS_INPUT
+    USERS_INPUT="${USERS_INPUT//,/ }"
+
+    for u in $USERS_INPUT; do
+        [ -z "$u" ] && continue
+        if ! [[ "$u" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo -e "${R}[ERREUR]${NC} Nom utilisateur invalide: '$u' (utilise lettres/chiffres/_-)"
+            continue
+        fi
+
+        id -u "$u" &>/dev/null || useradd -m -s /bin/bash "$u"
         echo "$u:$PASS_DEFAUT" | chpasswd
-        mkdir -p /home/$u/Maildir/{cur,new,tmp}
-        chown -R $u:$u /home/$u/Maildir
-        chmod -R 700 /home/$u/Maildir
-        echo "Bienvenue. Serveur pret. Aucun certificat requis." | mail -s "Initialisation" $u@$DOMAIN
+        mkdir -p "/home/$u/Maildir/cur" "/home/$u/Maildir/new" "/home/$u/Maildir/tmp"
+        chown -R "$u:$u" "/home/$u/Maildir"
+        chmod -R 700 "/home/$u/Maildir"
+        echo "Bienvenue. Serveur pret. Aucun certificat requis." | mail -s "Initialisation" "$u@$DOMAIN" || true
+
+        if [ -z "$USERS_CREATED" ]; then
+            USERS_CREATED="$u"
+        else
+            USERS_CREATED="$USERS_CREATED, $u"
+        fi
     done
-    echo -e "${G}[OK]${NC} Comptes créés avec stockage serveur actif."
+
+    if [ -n "$USERS_CREATED" ]; then
+        echo -e "${G}[OK]${NC} Comptes créés : ${W}$USERS_CREATED${NC} (mdp : ${PASS_DEFAUT})"
+    else
+        echo -e "${Y}[INFO]${NC} Aucun compte créé."
+    fi
 fi
 
 # --- 8. TESTS AUTOMATIQUES (DNS / SMTP / IMAP) ---
@@ -305,7 +327,11 @@ if [ "$SSL_ENABLED" -eq 1 ]; then
 else
     echo -e "   - Sécurité : ${R}AUCUNE / NONE${NC} (conforme sujet)"
 fi
-echo -e "   - Comptes : ${W}direction, rh, informatique${NC} (mdp par défaut : ${PASS_DEFAUT})"
+if [ -n "$USERS_CREATED" ]; then
+    echo -e "   - Comptes : ${W}$USERS_CREATED${NC} (mdp par défaut : ${PASS_DEFAUT})"
+else
+    echo -e "   - Comptes : ${W}(non renseigné ici)${NC} (mdp par défaut : ${PASS_DEFAUT})"
+fi
 draw_line
 echo -e "${C}Commandes de test manuelles :${NC}"
 echo -e "   - Mails en direct : ${W}tail -f /var/log/mail.log${NC}"
