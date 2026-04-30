@@ -90,6 +90,22 @@ if ask_confirm "Installer et activer les logs (/var/log/mail.log)"; then
     echo -e "${G}[OK]${NC} Les logs mail sont maintenant actifs."
 fi
 
+# --- 2 BIS. SSH (OPTIONNEL) ---
+if ask_confirm "Installer SSH (openssh-server) et autoriser l'accès root"; then
+    echo -e "${C}[INFO]${NC} Installation de openssh-server..."
+    apt update && apt install -y openssh-server
+    systemctl enable --now ssh
+
+    mkdir -p /etc/ssh/sshd_config.d
+    cat > /etc/ssh/sshd_config.d/99-sio-root.conf <<'EOF'
+PermitRootLogin yes
+PasswordAuthentication yes
+EOF
+
+    systemctl restart ssh
+    echo -e "${G}[OK]${NC} SSH installé. Root autorisé (mot de passe)."
+fi
+
 # --- 3. CONFIGURATION RÉSEAU ---
 if ask_confirm "Configurer l'IP statique ($IP_SRV)"; then
     IFACE=$(ls /sys/class/net | grep -v lo | head -n 1)
@@ -153,6 +169,24 @@ www IN A $IP_SRV
 mail IN A $IP_SRV
 EOF
     echo "<h1>Lise Charmel - Production $ZONE</h1>" > /var/www/html/index.html
+
+    # Nginx : répondre sur $DOMAIN et www.$DOMAIN
+    cat > "/etc/nginx/sites-available/$DOMAIN.conf" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN www.$DOMAIN;
+
+    root /var/www/html;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    ln -sf "/etc/nginx/sites-available/$DOMAIN.conf" "/etc/nginx/sites-enabled/$DOMAIN.conf"
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
     systemctl restart bind9 nginx
     echo -e "${G}[OK]${NC} Services DNS et Web opérationnels."
 fi
