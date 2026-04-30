@@ -113,8 +113,28 @@ fi
 # --- 3. CONFIGURATION RÉSEAU ---
 if ask_confirm "Configurer l'IP statique ($IP_SRV)"; then
     IFACE=$(ls /sys/class/net | grep -v lo | head -n 1)
-    cp /etc/network/interfaces /etc/network/interfaces.bak 2>/dev/null
-    cat << EOF > /etc/network/interfaces
+    if [ -d /etc/netplan ]; then
+        echo -e "${C}[INFO]${NC} Netplan détecté (Ubuntu Desktop/GUI) : configuration via /etc/netplan/01-mail-sio.yaml"
+        cp -a /etc/netplan "/etc/netplan.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+
+        cat > /etc/netplan/01-mail-sio.yaml <<EOF
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    $IFACE:
+      dhcp4: no
+      addresses: [$IP_SRV/16]
+      gateway4: $GW
+      nameservers:
+        addresses: [$IP_SRV, $GW]
+EOF
+        netplan generate && netplan apply
+        echo -e "${G}[OK]${NC} Réseau configuré via Netplan sur $IFACE."
+    else
+        echo -e "${C}[INFO]${NC} ifupdown détecté : configuration via /etc/network/interfaces"
+        cp /etc/network/interfaces /etc/network/interfaces.bak 2>/dev/null
+        cat << EOF > /etc/network/interfaces
 auto lo
 iface lo inet loopback
 auto $IFACE
@@ -123,9 +143,12 @@ iface $IFACE inet static
     netmask 255.255.0.0
     gateway $GW
 EOF
-    echo -e "nameserver 127.0.0.1\nnameserver $GW" > /etc/resolv.conf
-    systemctl restart networking
-    echo -e "${G}[OK]${NC} Réseau configuré sur $IFACE."
+        # Sur les systèmes ifupdown, resolv.conf peut être géré par resolvconf/systemd-resolved.
+        # On tente quand même une config simple.
+        echo -e "nameserver $IP_SRV\nnameserver $GW" > /etc/resolv.conf || true
+        systemctl restart networking
+        echo -e "${G}[OK]${NC} Réseau configuré sur $IFACE."
+    fi
 fi
 
 # --- 4. CONFIGURATION SWITCH CISCO ---
