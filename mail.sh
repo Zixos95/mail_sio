@@ -48,8 +48,8 @@ read -p "ID Table (ex: 15) : " ID
 read -p "Nom de la zone (ex: erreur404) : " ZONE
 
 echo -e "\n${Y}>> Choix du plan d'adressage ?${NC}"
-echo -e "   1) 10.10.x.1"
-echo -e "   2) 172.30.x.1"
+echo -e "   1) 10.10.x.*"
+echo -e "   2) 172.30.x.*"
 read -p "Choix [1/2] (défaut: 1) : " NET_CHOICE
 
 case "${NET_CHOICE:-1}" in
@@ -67,7 +67,14 @@ case "${NET_CHOICE:-1}" in
     ;;
 esac
 
-IP_SRV="$NET_A.$NET_B.$ID.1"
+read -p "Dernier octet IP du serveur (défaut: 1) : " SRV_HOST
+SRV_HOST="${SRV_HOST:-1}"
+if ! [[ "$SRV_HOST" =~ ^[0-9]+$ ]] || [ "$SRV_HOST" -lt 1 ] || [ "$SRV_HOST" -gt 254 ]; then
+    echo -e "${R}[ERREUR]${NC} Octet serveur invalide: '$SRV_HOST' (attendu 1..254)"
+    exit 1
+fi
+
+IP_SRV="$NET_A.$NET_B.$ID.$SRV_HOST"
 IP_SW="$NET_A.$NET_B.$ID.254"
 GW="$NET_A.$NET_B.0.1"
 LAN_CIDR="$NET_A.$NET_B.0.0/16"
