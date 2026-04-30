@@ -76,7 +76,11 @@ fi
 
 IP_SRV="$NET_A.$NET_B.$ID.$SRV_HOST"
 IP_SW="$NET_A.$NET_B.$ID.254"
-GW="$NET_A.$NET_B.0.1"
+if [ "$NET_A" -eq 172 ] && [ "$NET_B" -eq 30 ]; then
+    GW="$NET_A.$NET_B.$ID.254"
+else
+    GW="$NET_A.$NET_B.0.1"
+fi
 LAN_CIDR="$NET_A.$NET_B.0.0/16"
 DOMAIN="$ZONE.ac-monge.fr"
 PASS_DEFAUT="2000"
