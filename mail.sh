@@ -48,21 +48,29 @@ read -p "ID Table (ex: 15) : " ID
 read -p "Nom de la zone (ex: erreur404) : " ZONE
 
 echo -e "\n${Y}>> Choix du plan d'adressage ?${NC}"
-echo -e "   1) 10.10.x.*"
-echo -e "   2) 172.30.x.*"
-read -p "Choix [1/2] (défaut: 1) : " NET_CHOICE
+echo -e "   1) 10.10.x.*   (masque /16 — comme au lycée)"
+echo -e "   2) 172.30.x.*  (masque /16)"
+echo -e "   3) 192.168.x.* (masque /24 — idéal maison / box sur .1)"
+read -p "Choix [1/2/3] (défaut: 1) : " NET_CHOICE
 
 case "${NET_CHOICE:-1}" in
+  3)
+    NET_A=192
+    NET_B=168
+    NET_MASK="255.255.255.0"
+    ;;
   2)
     NET_A=172
     NET_B=30
+    NET_MASK="255.255.0.0"
     ;;
   1|"")
     NET_A=10
     NET_B=10
+    NET_MASK="255.255.0.0"
     ;;
   *)
-    echo -e "${R}[ERREUR]${NC} Choix réseau invalide: '${NET_CHOICE}' (attendu 1 ou 2)"
+    echo -e "${R}[ERREUR]${NC} Choix réseau invalide: '${NET_CHOICE}' (attendu 1, 2 ou 3)"
     exit 1
     ;;
 esac
@@ -78,10 +86,16 @@ IP_SRV="$NET_A.$NET_B.$ID.$SRV_HOST"
 IP_SW="$NET_A.$NET_B.$ID.254"
 if [ "$NET_A" -eq 172 ] && [ "$NET_B" -eq 30 ]; then
     GW="$NET_A.$NET_B.$ID.254"
+elif [ "$NET_A" -eq 192 ] && [ "$NET_B" -eq 168 ]; then
+    GW="$NET_A.$NET_B.$ID.1"
 else
     GW="$NET_A.$NET_B.0.1"
 fi
-LAN_CIDR="$NET_A.$NET_B.0.0/16"
+if [ "$NET_A" -eq 192 ] && [ "$NET_B" -eq 168 ]; then
+    LAN_CIDR="$NET_A.$NET_B.$ID.0/24"
+else
+    LAN_CIDR="$NET_A.$NET_B.0.0/16"
+fi
 DOMAIN="$ZONE.ac-monge.fr"
 PASS_DEFAUT="2000"
 USERS_CREATED=""
@@ -120,7 +134,7 @@ iface lo inet loopback
 auto $IFACE
 iface $IFACE inet static
     address $IP_SRV
-    netmask 255.255.0.0
+    netmask $NET_MASK
     gateway $GW
 EOF
     echo -e "nameserver 127.0.0.1\nnameserver $GW" > /etc/resolv.conf
@@ -148,7 +162,7 @@ int fa0/24
  sw acc vlan 10
  exit
 int vlan 10
- ip add $IP_SW 255.255.0.0
+ ip add $IP_SW $NET_MASK
  no shut
  exit
 ip default-gateway $GW
@@ -385,7 +399,7 @@ echo -e "   - Vérifier DNS : ${W}dig $DOMAIN MX${NC} (ou nslookup mail.$DOMAIN)
 draw_line
 echo -e "${Y}CONFIG RÉSEAU PC DE TEST (À METTRE EN STATIQUE) :${NC}"
 echo -e "   - IP (exemple) : ${W}$NET_A.$NET_B.$ID.10${NC}"
-echo -e "   - Masque      : ${W}255.255.0.0 (/16)${NC}"
+echo -e "   - Masque      : ${W}$NET_MASK${NC} ${Y}(${LAN_CIDR})${NC}"
 echo -e "   - Passerelle  : ${W}$GW${NC}"
 echo -e "   - DNS         : ${W}$IP_SRV${NC}  (le serveur fait DNS + WEB + MAIL)"
 echo -e "   - Domaine     : ${W}$DOMAIN${NC}"
@@ -408,8 +422,13 @@ echo -e "\n${W}3) Vérifier la connectivité IP (si besoin)${NC}"
 echo -e "   - Commande : ${G}ping -c 2 $IP_SRV${NC}"
 echo -e "   - Attendu  : ${W}2 réponses${NC}"
 
-echo -e "\n${Y}IMPORTANT (pour le /16) :${NC}"
-echo -e "   - Avec un masque ${W}/16${NC}, ton PC (${W}$NET_A.$NET_B.$ID.x${NC}) et le serveur (${W}$IP_SRV${NC})"
-echo -e "     sont dans le même réseau ${W}$NET_A.$NET_B.0.0/16${NC} -> accès direct OK."
-echo -e "   - Si tu mets un masque ${R}/24${NC}, le PC serait dans ${W}$NET_A.$NET_B.$ID.0/24${NC} et le serveur dans ${W}$NET_A.$NET_B.$ID.0/24${NC} (ça peut marcher),"
-echo -e "     mais tout ce qui est hors ${W}$NET_A.$NET_B.$ID.*${NC} (ex: passerelle ${W}$GW${NC}) dépendra du routage."
+echo -e "\n${Y}IMPORTANT (plan d'adressage) :${NC}"
+if [ "$NET_A" -eq 192 ] && [ "$NET_B" -eq 168 ]; then
+    echo -e "   - Plan ${W}192.168${NC} : sous-réseau ${W}$LAN_CIDR${NC}, passerelle type box ${W}$GW${NC}."
+    echo -e "   - Mets ton PC dans ${W}$NET_A.$NET_B.$ID.x${NC} avec le même masque ${W}$NET_MASK${NC}."
+else
+    echo -e "   - Avec un masque ${W}/16${NC}, ton PC (${W}$NET_A.$NET_B.$ID.x${NC}) et le serveur (${W}$IP_SRV${NC})"
+    echo -e "     sont dans le même réseau ${W}$NET_A.$NET_B.0.0/16${NC} -> accès direct OK."
+    echo -e "   - Si tu mets un masque ${R}/24${NC}, le PC serait dans ${W}$NET_A.$NET_B.$ID.0/24${NC} et le serveur dans ${W}$NET_A.$NET_B.$ID.0/24${NC} (ça peut marcher),"
+    echo -e "     mais tout ce qui est hors ${W}$NET_A.$NET_B.$ID.*${NC} (ex: passerelle ${W}$GW${NC}) dépendra du routage."
+fi
