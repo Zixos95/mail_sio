@@ -209,10 +209,10 @@ EOF
     echo -e "${G}[OK]${NC} Services DNS et Web opérationnels."
 fi
 
-# --- 6. MAIL : FIX TOTAL STARTTLS & STOCKAGE ---
+# --- 6. MAIL : POSTFIX / DOVECOT (sans TLS puis upgrade section 6 bis si demandé) ---
 if ask_confirm "Installer le service Mail (Postfix/Dovecot) - SANS SSL (conforme sujet)"; then
-    DEBIAN_FRONTEND=noninteractive apt install -y postfix dovecot-imapd mailutils swaks
-    
+    DEBIAN_FRONTEND=noninteractive apt install -y postfix dovecot-imapd mailutils swaks openssl
+
     postconf -e "myhostname = mail.$DOMAIN"
     postconf -e "mydestination = \$myhostname, $DOMAIN, localhost"
     postconf -e "mynetworks = 127.0.0.0/8 $LAN_CIDR"
@@ -222,62 +222,116 @@ if ask_confirm "Installer le service Mail (Postfix/Dovecot) - SANS SSL (conforme
     postconf -e "smtp_tls_security_level = none"
     postconf -e "smtp_use_tls = no"
 
-    echo "ssl = no" > /etc/dovecot/conf.d/10-ssl.conf
+    cat > /etc/dovecot/conf.d/10-ssl.conf <<'DOVEOF'
+ssl = no
+DOVEOF
     sed -i 's|^mail_location = .*|mail_location = maildir:~/Maildir|' /etc/dovecot/conf.d/10-mail.conf
     sed -i 's|^#disable_plaintext_auth = .*|disable_plaintext_auth = no|' /etc/dovecot/conf.d/10-auth.conf
-    
-    echo "service imap-login {
-      inet_listener imap {
-        port = 143
-      }
-    }" > /etc/dovecot/conf.d/10-master.conf
+    sed -i 's|^disable_plaintext_auth = yes|disable_plaintext_auth = no|' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true
+
+    rm -f /etc/dovecot/conf.d/99-sio-tls-overlay.conf
+    cat > /etc/dovecot/conf.d/99-sio-plain-imaps-off.conf <<'DOVEOF'
+service imap-login {
+  inet_listener imaps {
+    port = 0
+  }
+}
+DOVEOF
 
     systemctl restart postfix dovecot
-    echo -e "${G}[OK]${NC} Postfix et Dovecot configurés en mode local sécurisé."
+    echo -e "${G}[OK]${NC} Postfix et Dovecot : mode sans chiffrement (IMAP 143, SMTP 25)."
 fi
 
-# --- 6 BIS. OPTION SSL/TLS (CERTIFICAT AUTO-SIGNÉ, HORS EXIGENCES SUJET) ---
-if ask_confirm "Activer SSL/TLS (OPTIONNEL, certificat auto-signé)"; then
-    echo -e "${C}[INFO]${NC} Génération certificat auto-signé pour mail.$DOMAIN..."
+# --- 6 BIS. TLS COMPLET (certificat auto-signé + SAN, Postfix STARTTLS + submission, Dovecot IMAPS) ---
+if ask_confirm "Activer SSL/TLS complet (certificat auto-signé, hors exigence PDF sujet)"; then
+    SSL_ENABLED=1
+    echo -e "${C}[INFO]${NC} Génération certificat (SAN: mail, domaine, IP serveur)…"
     mkdir -p /etc/ssl/mail_sio
-    if [ ! -f /etc/ssl/mail_sio/mail_sio.key ] || [ ! -f /etc/ssl/mail_sio/mail_sio.crt ]; then
-        openssl req -x509 -nodes -newkey rsa:2048 \
-          -keyout /etc/ssl/mail_sio/mail_sio.key \
-          -out /etc/ssl/mail_sio/mail_sio.crt \
-          -days 3650 -subj "/CN=mail.$DOMAIN"
-    fi
+    chmod 700 /etc/ssl/mail_sio
+    OPENSSL_CNF="$(mktemp)"
+    cat > "$OPENSSL_CNF" <<EOF
+[req]
+distinguished_name = dn
+x509_extensions = v3_req
+prompt = no
+encrypt_key = no
+[dn]
+CN = mail.$DOMAIN
+[v3_req]
+subjectAltName = @san
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+[san]
+DNS.1 = mail.$DOMAIN
+DNS.2 = $DOMAIN
+DNS.3 = www.$DOMAIN
+DNS.4 = localhost
+IP.1 = $IP_SRV
+IP.2 = 127.0.0.1
+EOF
+    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+      -keyout /etc/ssl/mail_sio/mail_sio.key \
+      -out /etc/ssl/mail_sio/mail_sio.crt \
+      -config "$OPENSSL_CNF" -extensions v3_req
+    rm -f "$OPENSSL_CNF"
+    chmod 640 /etc/ssl/mail_sio/mail_sio.key
+    chmod 644 /etc/ssl/mail_sio/mail_sio.crt
+    chown root:root /etc/ssl/mail_sio/mail_sio.key /etc/ssl/mail_sio/mail_sio.crt
 
-    echo -e "${C}[INFO]${NC} Activation TLS côté Postfix..."
+    echo -e "${C}[INFO]${NC} Postfix : STARTTLS (25), certificat serveur, protocoles modernes…"
     postconf -e "smtpd_use_tls = yes"
     postconf -e "smtpd_tls_security_level = may"
     postconf -e "smtp_tls_security_level = may"
+    postconf -e "smtp_use_tls = yes"
     postconf -e "smtpd_tls_auth_only = no"
     postconf -e "smtpd_tls_cert_file = /etc/ssl/mail_sio/mail_sio.crt"
-    postconf -e "smtpd_tls_key_file  = /etc/ssl/mail_sio/mail_sio.key"
+    postconf -e "smtpd_tls_key_file = /etc/ssl/mail_sio/mail_sio.key"
+    postconf -e "smtpd_tls_loglevel = 1"
+    postconf -e "smtpd_tls_received_header = yes"
+    postconf -e "smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1"
+    postconf -e "smtp_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1"
+    postconf -e "smtpd_tls_mandatory_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1"
+    postconf -e "tls_medium_cipherlist = ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+    postconf -e "smtpd_tls_ciphers = medium"
+    postconf -e "smtp_tls_ciphers = medium"
 
-    echo -e "${C}[INFO]${NC} Activation TLS côté Dovecot (IMAPS 993 conservé en plus) ..."
-    cat > /etc/dovecot/conf.d/10-ssl.conf <<EOF
-ssl = yes
-ssl_cert = </etc/ssl/mail_sio/mail_sio.crt
-ssl_key  = </etc/ssl/mail_sio/mail_sio.key
-disable_plaintext_auth = no
-EOF
+    if grep -qE '^#?submission' /etc/postfix/master.cf; then
+        sed -i 's/^#submission/submission/' /etc/postfix/master.cf
+    fi
+    postconf -P submission/inet/smtpd_tls_security_level=may 2>/dev/null || true
+    postconf -P submission/inet/smtpd_client_restrictions=permit_mynetworks,permit_sasl_authenticated,reject 2>/dev/null || true
+    postconf -P submission/inet/smtpd_recipient_restrictions=permit_mynetworks,permit_sasl_authenticated,reject_unauth_destination 2>/dev/null || true
 
-    cat > /etc/dovecot/conf.d/10-master.conf <<EOF
-service imap-login {
-  inet_listener imap {
-    port = 143
-  }
-  inet_listener imaps {
-    port = 993
-    ssl = yes
-  }
-}
-EOF
+    echo -e "${C}[INFO]${NC} Dovecot : TLS 1.2+, IMAPS 993, STARTTLS possible sur 143…"
+    rm -f /etc/dovecot/conf.d/99-sio-plain-imaps-off.conf
+    {
+      echo "ssl = yes"
+      echo "ssl_cert = </etc/ssl/mail_sio/mail_sio.crt"
+      echo "ssl_key = </etc/ssl/mail_sio/mail_sio.key"
+      echo "ssl_min_protocol = TLSv1.2"
+      echo "ssl_prefer_server_ciphers = yes"
+      if [ -r /usr/share/dovecot/dh.pem ]; then
+        echo "ssl_dh = </usr/share/dovecot/dh.pem"
+      fi
+    } > /etc/dovecot/conf.d/10-ssl.conf
+    rm -f /etc/dovecot/conf.d/99-sio-tls-overlay.conf
+    sed -i 's/^disable_plaintext_auth = yes/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true
+    sed -i 's/^#disable_plaintext_auth = yes/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true
+
+    if ! postfix check; then
+        echo -e "${R}[ERREUR]${NC} postfix check a échoué."
+    fi
+    if ! doveconf -n >/dev/null 2>&1; then
+        echo -e "${R}[ERREUR]${NC} doveconf -n signale une erreur — vérifie la config Dovecot."
+    fi
 
     systemctl restart postfix dovecot
-    echo -e "${G}[OK]${NC} SSL/TLS activé (certificat auto-signé)."
-    echo -e "${Y}[NOTE]${NC} Pour rester STRICTEMENT conforme au PDF, tu peux laisser cette étape sur 'n'."
+
+    echo -e "${G}[OK]${NC} TLS activé : cert ${W}/etc/ssl/mail_sio/${NC}, Postfix STARTTLS + submission 587, Dovecot IMAPS 993."
+    echo -e "${Y}Vérifs rapides :${NC} ${W}openssl s_client -connect 127.0.0.1:993 -servername mail.$DOMAIN -brief${NC}"
+    echo -e "  ${W}openssl s_client -connect 127.0.0.1:25 -starttls smtp -brief${NC}"
+    echo -e "${Y}[NOTE]${NC} Certificat auto-signé : Thunderbird demandera une exception de confiance."
+    echo -e "${Y}[NOTE]${NC} Pour rester strictement conforme au PDF sans chiffrement, refuse cette étape."
 fi
 
 # --- 7. UTILISATEURS & PERMISSIONS ---
@@ -335,10 +389,17 @@ for port in 25 143; do
 done
 
 if [ "$SSL_ENABLED" -eq 1 ]; then
-    if nc -z 127.0.0.1 993 2>/dev/null; then
-        echo -e "   ${G}OK${NC} Port 993 (IMAPS) ouvert"
-    else
-        echo -e "   ${R}ECHEC${NC} Port 993 (IMAPS) fermé"
+    for port in 993 587; do
+        if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+            echo -e "   ${G}OK${NC} Port $port ouvert (TLS: IMAPS ou submission)"
+        else
+            echo -e "   ${R}ECHEC${NC} Port $port fermé"
+        fi
+    done
+    echo -e "${Y}- Poignée TLS (openssl, en local)${NC}"
+    if command -v openssl >/dev/null 2>&1; then
+        echo -e "   IMAPS : ${W}openssl s_client -connect 127.0.0.1:993 -servername mail.$DOMAIN -brief </dev/null 2>&1 | head -3${NC}"
+        echo -e "   SMTP+STARTTLS : ${W}echo QUIT | openssl s_client -connect 127.0.0.1:25 -starttls smtp -brief 2>&1 | head -5${NC}"
     fi
 fi
 
@@ -380,9 +441,11 @@ echo -e "   - Port SMTP             : ${W}25${NC}"
 echo -e "   - Sécurité SMTP         : ${R}Aucune${NC}"
 echo -e "   - Authentification SMTP : ${W}Mot de passe normal${NC}"
 if [ "$SSL_ENABLED" -eq 1 ]; then
-    echo -e "   - Option TLS (si activée plus haut) :"
-    echo -e "       - IMAPS : ${W}993${NC} (SSL/TLS activé)"
-    echo -e "       - SMTP  : ${W}25${NC} (STARTTLS si proposé, selon réglage Thunderbird)"
+    echo -e "   - ${G}TLS activé${NC} (cert auto-signé ${W}/etc/ssl/mail_sio/${NC}) :"
+    echo -e "       - IMAP : ${W}SSL/TLS${NC} + port ${W}993${NC} (recommandé) ${Y}ou${NC} port 143 + STARTTLS"
+    echo -e "       - SMTP : port ${W}587${NC} (STARTTLS) ${Y}ou${NC} ${W}25${NC} + STARTTLS"
+    echo -e "       - Thunderbird : accepter l’${Y}exception de sécurité${NC} (certificat non reconnu)"
+    echo -e "       - Vérif serveur : ${W}postconf | grep smtpd_tls_cert${NC} ; ${W}doveconf -n | grep ssl_cert${NC}"
 else
     echo -e "   - Sécurité : ${R}AUCUNE / NONE${NC} (conforme sujet)"
 fi
